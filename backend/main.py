@@ -6,9 +6,8 @@ from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import tensorflow as tf
 import numpy as np
-from tensorflow.keras.utils import get_file # Import get_file utility
+from tensorflow.keras.utils import get_file
 
-# Use an absolute import because we are running main.py as the top-level script
 from utils import (
     preprocess_for_cnn, 
     preprocess_for_mobilenet, 
@@ -21,12 +20,13 @@ mobilenet_model = None
 siamese_model = None
 print("Server started. Models will be loaded on first use (lazy loading).")
 
-# --- MODIFIED: Replace these with your actual Hugging Face model URLs ---
+# --- IMPORTANT: Replace these with your actual Hugging Face model URLs ---
 MODEL_URLS = {
     "simple_cnn": "https://huggingface.co/Tarun5098/signature-ai-models/resolve/main/best_signature_model_no_func.keras",
     "mobilenet": "https://huggingface.co/Tarun5098/signature-ai-models/resolve/main/best_signature_model_mobilenet_streamed.keras",
     "siamese": "https://huggingface.co/Tarun5098/signature-ai-models/resolve/main/best_signature_siamese_model_final.keras"
 }
+# --- END OF URLS ---
 
 # --- Custom Functions for Siamese Model ---
 def euclidean_distance(vectors):
@@ -45,12 +45,11 @@ custom_objects = {
 # --- FastAPI App Setup ---
 app = FastAPI(title="SignatureAI API")
 
-# MODIFIED: Prepare origins for deployment. Add your future Netlify URL here.
+# MODIFIED: Add your live Netlify URL to the origins list
 origins = [
-    "http://localhost",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "https://signature-ai.netlify.app"  # <-- IMPORTANT: Add your deployed frontend URL here later
+    "https://signature-ai.netlify.app"  # <-- Your deployed frontend URL
 ]
 
 app.add_middleware(
@@ -63,8 +62,12 @@ app.add_middleware(
 
 # Helper function to download and cache models
 def download_and_load_model(model_name, url, custom_obj=None):
-    model_path = get_file(f"{model_name}.keras", url, cache_dir=".", cache_subdir="models")
-    return tf.keras.models.load_model(model_path, custom_objects=custom_obj)
+    try:
+        model_path = get_file(f"{model_name}.keras", url, cache_dir=".", cache_subdir="models")
+        return tf.keras.models.load_model(model_path, custom_objects=custom_obj)
+    except Exception as e:
+        # This will catch download errors or loading errors
+        raise e
 
 # --- Modified loading functions ---
 def get_simple_cnn_model():
@@ -105,7 +108,7 @@ def get_siamese_model():
 def read_root():
     return {"message": "Welcome to the SignatureAI Verification API"}
 
-# --- The /verify/ endpoint remains the same as the previous version ---
+# --- The /verify/ endpoint remains the same ---
 @app.post("/verify/")
 async def verify_signature_endpoint(
     model_id: str = Form(...), 
@@ -162,7 +165,6 @@ async def verify_signature_endpoint(
         raise e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred during prediction: {e}")
-
 
     end_time = time.time()
     processing_time = int((end_time - start_time) * 1000)
