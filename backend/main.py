@@ -50,7 +50,7 @@ origins = [
     "http://localhost",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "https://your-netlify-app-name.netlify.app"  # <-- IMPORTANT: Add your deployed frontend URL here later
+    "https://signature-ai.netlify.app"  # <-- IMPORTANT: Add your deployed frontend URL here later
 ]
 
 app.add_middleware(

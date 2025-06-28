@@ -1,5 +1,5 @@
-// The backend URL. Change this if your backend is running elsewhere.
-const API_BASE_URL = 'http://localhost:8000';
+// The backend URL. Change this to your deployed backend URL.
+const API_BASE_URL = 'https://signature-ai-1.onrender.com';
 
 // The type for the response data from the backend.
 // It's augmented with frontend-specific fields for the ResultDisplay component.
