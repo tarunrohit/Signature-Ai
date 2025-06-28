@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import tensorflow as tf
 import numpy as np
 from tensorflow.keras.utils import get_file
-from contextlib import asynccontextmanager
+import threading # Import the threading library
 
 from utils import (
     preprocess_for_cnn, 
@@ -16,7 +16,12 @@ from utils import (
 )
 
 # --- MODEL PLACEHOLDERS ---
-models = {}
+# Use a dictionary to hold models. This is cleaner for managing multiple models.
+models = {
+    "simple_cnn": None,
+    "mobilenet": None,
+    "siamese": None
+}
 
 # --- CUSTOM FUNCTIONS (needed for loading) ---
 def euclidean_distance(vectors):
@@ -27,7 +32,7 @@ def contrastive_loss(y_true, y_pred, margin=1.0):
     y_true = tf.cast(y_true, y_pred.dtype)
     return tf.reduce_mean(y_true * tf.square(y_pred) + (1 - y_true) * tf.square(tf.maximum(margin - y_pred, 0)))
 
-# --- MODEL LOADING & LIFESPAN MANAGEMENT ---
+# --- MODEL LOADING LOGIC ---
 MODEL_URLS = {
     "simple_cnn": "https://huggingface.co/Tarun5098/signature-ai-models/resolve/main/best_signature_model_no_func.keras",
     "mobilenet": "https://huggingface.co/Tarun5098/signature-ai-models/resolve/main/best_signature_model_mobilenet_streamed.keras",
@@ -35,37 +40,38 @@ MODEL_URLS = {
 }
 MODELS_DIR = "models_cache"
 
-def download_and_load_model(model_name, url, custom_objects=None):
-    print(f"Downloading and loading {model_name} model...")
+# This function will run in a separate thread
+def load_models_in_background():
+    """Downloads and loads all models into the global 'models' dictionary."""
+    print("Background thread started for model loading.")
+    custom_objects = {'contrastive_loss': contrastive_loss, 'euclidean_distance': euclidean_distance}
+    
     try:
-        model_path = get_file(f"{model_name}.keras", url, cache_dir=".", cache_subdir=MODELS_DIR)
-        model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
-        print(f"{model_name} model loaded successfully.")
-        return model
+        # Load SimpleCNN
+        print("Downloading and loading simple_cnn model...")
+        model_path = get_file("simple_cnn.keras", MODEL_URLS["simple_cnn"], cache_dir=".", cache_subdir=MODELS_DIR)
+        models["simple_cnn"] = tf.keras.models.load_model(model_path)
+        print("SimpleCNN model loaded successfully.")
+
+        # Load MobileNetV2
+        print("Downloading and loading mobilenet model...")
+        model_path = get_file("mobilenet.keras", MODEL_URLS["mobilenet"], cache_dir=".", cache_subdir=MODELS_DIR)
+        models["mobilenet"] = tf.keras.models.load_model(model_path)
+        print("MobileNetV2 model loaded successfully.")
+        
+        # Load Siamese
+        print("Downloading and loading siamese model...")
+        model_path = get_file("siamese.keras", MODEL_URLS["siamese"], cache_dir=".", cache_subdir=MODELS_DIR)
+        models["siamese"] = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
+        print("Siamese model loaded successfully.")
+
+        print("All models have been loaded in the background.")
     except Exception as e:
-        print(f"CRITICAL ERROR loading {model_name}: {e}")
-        raise e
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # This code runs on startup after the server starts listening
-    print("Server startup: Beginning model loading...")
-    
-    models["simple_cnn"] = download_and_load_model("simple_cnn", MODEL_URLS["simple_cnn"])
-    models["mobilenet"] = download_and_load_model("mobilenet", MODEL_URLS["mobilenet"])
-    models["siamese"] = download_and_load_model("siamese", MODEL_URLS["siamese"], custom_objects={
-        'contrastive_loss': contrastive_loss,
-        'euclidean_distance': euclidean_distance
-    })
-    
-    print("All models loaded. Application is ready.")
-    yield
-    # Code here would run on shutdown
-    print("Server shutting down.")
-
+        print(f"FATAL: A model failed to load in the background thread: {e}")
 
 # --- FastAPI APP SETUP ---
-app = FastAPI(title="SignatureAI API", lifespan=lifespan)
+# NOTE: We are NOT using the 'lifespan' manager anymore
+app = FastAPI(title="SignatureAI API")
 
 origins = [
     "http://localhost:5173",
@@ -75,17 +81,15 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    methods=["*"],
+    allow_methods=["*"],  # CORRECTED: from 'methods' to 'allow_methods'
     allow_headers=["*"],
 )
 
-
 # --- ENDPOINTS ---
 
-# NEW AND CRITICAL: Health check endpoint for Render
 @app.get("/healthz", status_code=200)
 def health_check():
-    """This endpoint is used by Render to check if the server is alive."""
+    """Endpoint for Render's health check."""
     return {"status": "ok"}
 
 @app.get("/")
@@ -98,15 +102,17 @@ async def verify_signature_endpoint(
     image: UploadFile = File(...),
     reference_image: Optional[UploadFile] = File(None)
 ):
-    if models.get(model_id) is None and models.get(model_id.replace('v2', '')) is None:
-        raise HTTPException(status_code=503, detail=f"The '{model_id}' model is not ready or failed to load. Please check server logs.")
+    model_key = model_id.replace('v2', '') # Handle 'mobilenetv2' vs 'mobilenet'
+    if models.get(model_key) is None:
+        raise HTTPException(status_code=503, detail=f"The '{model_id}' model is not ready or failed to load. Please try again in a moment.")
 
     start_time = time.time()
     image_bytes = await image.read()
     response_data = {}
+    
+    model = models[model_key]
 
     if model_id == 'simplecnn':
-        model = models["simple_cnn"]
         processed_image = preprocess_for_cnn(image_bytes)
         prediction = model.predict(processed_image)[0][0]
         is_original = bool(prediction < 0.5)
@@ -114,7 +120,6 @@ async def verify_signature_endpoint(
         response_data = {"isOriginal": is_original, "confidence": float(confidence)}
             
     elif model_id == 'mobilenetv2':
-        model = models["mobilenet"]
         processed_image = preprocess_for_mobilenet(image_bytes)
         prediction = model.predict(processed_image)[0][0]
         is_original = bool(prediction < 0.5)
@@ -126,7 +131,6 @@ async def verify_signature_endpoint(
             raise HTTPException(status_code=400, detail="Reference image is required for the Siamese model.")
         
         anchor_bytes = await reference_image.read()
-        model = models["siamese"]
         processed_anchor = preprocess_for_siamese(anchor_bytes)
         processed_candidate = preprocess_for_siamese(image_bytes)
         distance = model.predict([processed_anchor, processed_candidate])[0][0]
@@ -150,3 +154,9 @@ async def verify_signature_endpoint(
         "processingTime": processing_time
     })
     return response_data
+
+# --- START BACKGROUND LOADING ---
+# This code runs only once when the script is first executed.
+print("Starting background thread for model loading.")
+thread = threading.Thread(target=load_models_in_background)
+thread.start()
