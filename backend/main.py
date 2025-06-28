@@ -16,10 +16,7 @@ from utils import (
 )
 
 # --- MODEL PLACEHOLDERS ---
-# These will be populated during the startup event
-simple_cnn_model = None
-mobilenet_model = None
-siamese_model = None
+models = {}
 
 # --- CUSTOM FUNCTIONS (needed for loading) ---
 def euclidean_distance(vectors):
@@ -30,12 +27,7 @@ def contrastive_loss(y_true, y_pred, margin=1.0):
     y_true = tf.cast(y_true, y_pred.dtype)
     return tf.reduce_mean(y_true * tf.square(y_pred) + (1 - y_true) * tf.square(tf.maximum(margin - y_pred, 0)))
 
-custom_objects = {
-    'contrastive_loss': contrastive_loss,
-    'euclidean_distance': euclidean_distance
-}
-
-# --- MODEL LOADING ON STARTUP (The Production Strategy) ---
+# --- MODEL LOADING & LIFESPAN MANAGEMENT ---
 MODEL_URLS = {
     "simple_cnn": "https://huggingface.co/Tarun5098/signature-ai-models/resolve/main/best_signature_model_no_func.keras",
     "mobilenet": "https://huggingface.co/Tarun5098/signature-ai-models/resolve/main/best_signature_model_mobilenet_streamed.keras",
@@ -43,44 +35,41 @@ MODEL_URLS = {
 }
 MODELS_DIR = "models_cache"
 
-def download_and_load_model(model_name, url, custom_obj=None):
+def download_and_load_model(model_name, url, custom_objects=None):
     print(f"Downloading and loading {model_name} model...")
     try:
         model_path = get_file(f"{model_name}.keras", url, cache_dir=".", cache_subdir=MODELS_DIR)
-        model = tf.keras.models.load_model(model_path, custom_objects=custom_obj)
+        model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
         print(f"{model_name} model loaded successfully.")
         return model
     except Exception as e:
         print(f"CRITICAL ERROR loading {model_name}: {e}")
-        raise e  # Raise the exception to prevent the app from thinking it's ready
+        raise e
 
-# MODIFIED: Use FastAPI's lifespan manager to load models after startup
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # This code runs on startup before the server starts accepting requests
-    global simple_cnn_model, mobilenet_model, siamese_model
+    # This code runs on startup after the server starts listening
     print("Server startup: Beginning model loading...")
     
-    try:
-        simple_cnn_model = download_and_load_model("simple_cnn", MODEL_URLS["simple_cnn"])
-        mobilenet_model = download_and_load_model("mobilenet", MODEL_URLS["mobilenet"])
-        siamese_model = download_and_load_model("siamese", MODEL_URLS["siamese"], custom_objects=custom_objects)
-        print("All models loaded. Application is ready to accept verify requests.")
-    except Exception as e:
-        print(f"FATAL: Application startup failed due to model loading error: {e}")
-
+    models["simple_cnn"] = download_and_load_model("simple_cnn", MODEL_URLS["simple_cnn"])
+    models["mobilenet"] = download_and_load_model("mobilenet", MODEL_URLS["mobilenet"])
+    models["siamese"] = download_and_load_model("siamese", MODEL_URLS["siamese"], custom_objects={
+        'contrastive_loss': contrastive_loss,
+        'euclidean_distance': euclidean_distance
+    })
+    
+    print("All models loaded. Application is ready.")
     yield
     # Code here would run on shutdown
     print("Server shutting down.")
 
 
-# Pass the lifespan manager to the app
+# --- FastAPI APP SETUP ---
 app = FastAPI(title="SignatureAI API", lifespan=lifespan)
 
-# --- CORS Middleware ---
 origins = [
     "http://localhost:5173",
-    "https://signature-ai.netlify.app"  # Your deployed frontend URL
+    "https://signature-ai.netlify.app"
 ]
 app.add_middleware(
     CORSMiddleware,
@@ -90,11 +79,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # --- ENDPOINTS ---
 
-# NEW: Health check endpoint for Render
+# NEW AND CRITICAL: Health check endpoint for Render
 @app.get("/healthz", status_code=200)
 def health_check():
+    """This endpoint is used by Render to check if the server is alive."""
     return {"status": "ok"}
 
 @app.get("/")
@@ -107,19 +98,15 @@ async def verify_signature_endpoint(
     image: UploadFile = File(...),
     reference_image: Optional[UploadFile] = File(None)
 ):
-    if model_id == 'simplecnn' and not simple_cnn_model:
-        raise HTTPException(status_code=503, detail="SimpleCNN model is not ready. Please try again in a moment.")
-    if model_id == 'mobilenetv2' and not mobilenet_model:
-        raise HTTPException(status_code=503, detail="MobileNetV2 model is not ready. Please try again in a moment.")
-    if model_id == 'siamesenet' and not siamese_model:
-        raise HTTPException(status_code=503, detail="Siamese model is not ready. Please try again in a moment.")
+    if models.get(model_id) is None and models.get(model_id.replace('v2', '')) is None:
+        raise HTTPException(status_code=503, detail=f"The '{model_id}' model is not ready or failed to load. Please check server logs.")
 
     start_time = time.time()
     image_bytes = await image.read()
     response_data = {}
 
     if model_id == 'simplecnn':
-        model = simple_cnn_model
+        model = models["simple_cnn"]
         processed_image = preprocess_for_cnn(image_bytes)
         prediction = model.predict(processed_image)[0][0]
         is_original = bool(prediction < 0.5)
@@ -127,7 +114,7 @@ async def verify_signature_endpoint(
         response_data = {"isOriginal": is_original, "confidence": float(confidence)}
             
     elif model_id == 'mobilenetv2':
-        model = mobilenet_model
+        model = models["mobilenet"]
         processed_image = preprocess_for_mobilenet(image_bytes)
         prediction = model.predict(processed_image)[0][0]
         is_original = bool(prediction < 0.5)
@@ -139,7 +126,7 @@ async def verify_signature_endpoint(
             raise HTTPException(status_code=400, detail="Reference image is required for the Siamese model.")
         
         anchor_bytes = await reference_image.read()
-        model = siamese_model
+        model = models["siamese"]
         processed_anchor = preprocess_for_siamese(anchor_bytes)
         processed_candidate = preprocess_for_siamese(image_bytes)
         distance = model.predict([processed_anchor, processed_candidate])[0][0]
