@@ -1,6 +1,5 @@
-// The backend URL. This MUST be your deployed Render URL.
-const API_BASE_URL = 'https://signature-ai-1.onrender.com'; // <-- REPLACE with your actual Render URL
-
+// The backend URL. This MUST be your deployed Hugging Face Space URL.
+const API_BASE_URL = 'https://tarun5098-signature-ai.hf.space';
 // The type for the response data from the backend.
 export interface VerificationResult {
   isOriginal: boolean;
