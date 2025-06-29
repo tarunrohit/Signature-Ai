@@ -25,8 +25,8 @@ export async function verifySignature(
     formData.append('reference_image', referenceImage);
   }
 
-  // MODIFIED: Point to the root endpoint '/'
-  const endpoint = '/';
+  // MODIFIED: Point to the /verify/ endpoint
+  const endpoint = '/verify/';
 
   try {
     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
@@ -42,7 +42,6 @@ export async function verifySignature(
 
     const result = await response.json();
     
-    // Augment the result for the frontend UI components
     if (result.model === 'siamesenet') {
       result.modelType = 'dual';
       if (result.distance !== undefined) {
