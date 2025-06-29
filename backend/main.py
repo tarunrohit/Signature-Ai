@@ -66,8 +66,9 @@ app = FastAPI(title="SignatureAI API", lifespan=lifespan)
 
 # --- CORS Middleware ---
 origins = [
+    "https://signature-ai.netlify.app",  # Your deployed frontend URL
+    # Add localhost for local testing
     "http://localhost:5173",
-    "https://signature-ai.netlify.app"
 ]
 app.add_middleware(
     CORSMiddleware,

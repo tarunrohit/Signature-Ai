@@ -1,5 +1,5 @@
-// IMPORTANT: Replace with your actual Railway backend URL after you deploy it.
-const API_BASE_URL = 'https://your-backend-name.up.railway.app'; 
+// The backend URL. This MUST be your deployed Render URL.
+const API_BASE_URL = 'https://signature-ai-1.onrender.com';
 
 // The type for the response data from the backend.
 export interface VerificationResult {
@@ -7,7 +7,7 @@ export interface VerificationResult {
   confidence: number;
   model: string;
   processingTime: number;
-  distance?: number;
+  distance?: number; 
   modelType: 'single' | 'dual';
   additionalMetrics?: {
     similarity?: number;
