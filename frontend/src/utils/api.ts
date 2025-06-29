@@ -13,7 +13,7 @@ export interface VerificationResult {
   confidence: number;
   model: string;
   processingTime: number;
-  distance?: number;
+  distance?: number; 
   modelType: 'single' | 'dual';
   additionalMetrics?: {
     similarity?: number;
@@ -21,23 +21,23 @@ export interface VerificationResult {
 }
 
 /**
- * NEW: Sends a quick, lightweight request to wake up the server.
- * This prevents the main /verify request from timing out on a cold start.
+ * Sends a quick, lightweight request to "wake up" a sleeping server on a free tier.
  * @param baseUrl The base URL of the backend service to wake up.
  */
 async function wakeUpServer(baseUrl: string): Promise<void> {
   try {
     console.log(`Pinging server at ${baseUrl} to wake it up...`);
-    // We use the healthz endpoint as it's the fastest possible response.
-    // We don't care about the response, just that the request completes.
+    // We use the root endpoint as it's the fastest possible response.
     await fetch(`${baseUrl}/`, { method: 'GET' });
     console.log(`Server at ${baseUrl} is awake.`);
   } catch (error) {
-    // We can ignore errors here, as the main fetch will handle them.
     console.warn(`Wake-up ping failed for ${baseUrl}, proceeding anyway.`);
   }
 }
 
+/**
+ * Makes a POST request to the appropriate backend service to verify a signature.
+ */
 export async function verifySignature(
   modelId: string,
   image: File,
@@ -48,9 +48,8 @@ export async function verifySignature(
     throw new Error(`Backend URL for model '${modelId}' is not configured in api.ts.`);
   }
   
-  // --- MODIFICATION: Wake up the server before sending the heavy request ---
+  // First, send a quick request to wake up the server if it's sleeping.
   await wakeUpServer(baseUrl);
-  // --- END OF MODIFICATION ---
 
   const formData = new FormData();
   formData.append('image', image);
@@ -58,13 +57,23 @@ export async function verifySignature(
   if (modelId === 'siamesenet' && referenceImage) {
     formData.append('reference_image', referenceImage);
   }
-  
+
+  // --- NEW: Add a timeout controller for the main request ---
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, 60000); // 60 seconds timeout
+
   const startTime = Date.now();
   try {
     const response = await fetch(`${baseUrl}/verify/`, {
       method: 'POST',
       body: formData,
+      signal: controller.signal, // Link the controller to the fetch request
     });
+
+    // Clear the timeout if the request completes in time
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => null);
@@ -94,7 +103,12 @@ export async function verifySignature(
     return result as VerificationResult;
 
   } catch (error: any) {
+    clearTimeout(timeoutId); // Also clear timeout on error
     console.error(`API call failed for model ${modelId}:`, error);
+
+    if (error.name === 'AbortError') {
+      throw new Error('The server is taking too long to respond. Please try again.');
+    }
     if (error.message.includes('Failed to fetch')) {
          throw new Error('Connection to the server failed. Please ensure the backend is running and reachable.');
     }
