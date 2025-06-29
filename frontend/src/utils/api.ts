@@ -1,4 +1,3 @@
-// The backend URL. This MUST be your deployed Hugging Face Space URL.
 const API_BASE_URL = 'https://tarun5098-signature-ai.hf.space';
 
 // The type for the response data from the backend.
@@ -27,8 +26,8 @@ export async function verifySignature(
     formData.append('reference_image', referenceImage);
   }
 
-  // MODIFIED: Point to the root endpoint '/'
-  const endpoint = '/';
+  // MODIFIED: Reverted to the /verify/ endpoint
+  const endpoint = '/verify/';
 
   try {
     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
