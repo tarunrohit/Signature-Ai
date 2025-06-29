@@ -1,5 +1,6 @@
 // The backend URL. This MUST be your deployed Hugging Face Space URL.
 const API_BASE_URL = 'https://tarun5098-signature-ai.hf.space';
+
 // The type for the response data from the backend.
 export interface VerificationResult {
   isOriginal: boolean;
@@ -26,14 +27,18 @@ export async function verifySignature(
     formData.append('reference_image', referenceImage);
   }
 
+  // MODIFIED: Ensure the path starts with a slash
+  const endpoint = '/verify/';
+
   try {
-    const response = await fetch(`${API_BASE_URL}/verify/`, {
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
       method: 'POST',
       body: formData,
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => null);
+      // Get a more specific error message from the backend response
+      const errorData = await response.json().catch(() => ({}));
       const detail = errorData?.detail || `Server responded with status: ${response.status}`;
       throw new Error(detail);
     }
@@ -59,7 +64,7 @@ export async function verifySignature(
   } catch (error: any) {
     console.error("API call failed:", error);
     if (error.message.includes('Failed to fetch')) {
-         throw new Error('Connection to the server failed. Please ensure the backend is running.');
+         throw new Error('Connection to the server failed. Please ensure the backend is running and accessible.');
     }
     throw new Error(error.message || 'An unknown error occurred during verification.');
   }

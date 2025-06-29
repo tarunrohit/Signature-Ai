@@ -6,7 +6,6 @@ from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import tensorflow as tf
 import numpy as np
-from tensorflow.keras.utils import get_file
 
 from utils import (
     preprocess_for_cnn, 
@@ -24,27 +23,27 @@ def contrastive_loss(y_true, y_pred, margin=1.0):
     return tf.reduce_mean(y_true * tf.square(y_pred) + (1 - y_true) * tf.square(tf.maximum(margin - y_pred, 0)))
 
 # --- MODEL LOADING ON STARTUP ---
-print("Server starting up... This may take a few minutes as models are loaded.")
+print("Server starting up... Loading models.")
+try:
+    simple_cnn_model = tf.keras.models.load_model('best_signature_model_no_func.keras')
+    print("SimpleCNN model loaded.")
 
-# --- The models are now expected to be in the same repository, so we just use their filenames ---
-simple_cnn_model = tf.keras.models.load_model('best_signature_model_no_func.keras')
-print("SimpleCNN model loaded.")
+    mobilenet_model = tf.keras.models.load_model('best_signature_model_mobilenet_streamed.keras')
+    print("MobileNetV2 model loaded.")
 
-mobilenet_model = tf.keras.models.load_model('best_signature_model_mobilenet_streamed.keras')
-print("MobileNetV2 model loaded.")
+    siamese_model = tf.keras.models.load_model('best_signature_siamese_model_final.keras', custom_objects={
+        'contrastive_loss': contrastive_loss,
+        'euclidean_distance': euclidean_distance
+    })
+    print("Siamese model loaded.")
+    print("All models loaded successfully.")
+except Exception as e:
+    print(f"CRITICAL ERROR loading models: {e}")
+    simple_cnn_model = mobilenet_model = siamese_model = None
 
-siamese_model = tf.keras.models.load_model('best_signature_siamese_model_final.keras', custom_objects={
-    'contrastive_loss': contrastive_loss,
-    'euclidean_distance': euclidean_distance
-})
-print("Siamese model loaded.")
-
-print("All models loaded. Initializing FastAPI application.")
-
-# --- FastAPI APP SETUP ---
+# --- FastAPI App Setup ---
 app = FastAPI(title="SignatureAI API")
 
-# Allow all origins for simplicity on Hugging Face Spaces
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -56,7 +55,7 @@ app.add_middleware(
 # --- ENDPOINTS ---
 @app.get("/")
 def read_root():
-    return {"message": "Welcome to the SignatureAI Verification API. Models are loaded."}
+    return {"message": "Welcome to the SignatureAI Verification API."}
 
 @app.post("/verify/")
 async def verify_signature_endpoint(
@@ -64,8 +63,11 @@ async def verify_signature_endpoint(
     image: UploadFile = File(...),
     reference_image: Optional[UploadFile] = File(None)
 ):
-    if not all([simple_cnn_model, mobilenet_model, siamese_model]):
-        raise HTTPException(status_code=503, detail="One or more models failed to load on startup. Please check server logs.")
+    # This check remains as a safeguard
+    if model_id == 'simplecnn' and simple_cnn_model is None or \
+       model_id == 'mobilenetv2' and mobilenet_model is None or \
+       model_id == 'siamesenet' and siamese_model is None:
+        raise HTTPException(status_code=503, detail="A required model failed to load on startup. Please check the server logs.")
 
     start_time = time.time()
     image_bytes = await image.read()
@@ -99,7 +101,11 @@ async def verify_signature_endpoint(
         threshold = 0.9 
         is_original = bool(distance < threshold)
         confidence = max(0, (1 - (distance / (threshold * 1.5)))) * 100
-        response_data = { "isOriginal": is_original, "confidence": float(confidence), "distance": float(distance) }
+        response_data = { 
+            "isOriginal": is_original, 
+            "confidence": float(confidence),
+            "distance": float(distance)
+        }
             
     else:
         raise HTTPException(status_code=400, detail="Invalid model ID provided.")
