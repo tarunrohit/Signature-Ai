@@ -4,9 +4,9 @@
  * from your deployed services on Render or Railway.
  */
 const API_URL_MAP: { [key: string]: string } = {
-  simplecnn: 'https://your-simple-cnn-backend.onrender.com',    // <-- REPLACE WITH YOUR SIMPLECNN URL
-  mobilenetv2: 'https://your-mobilenet-backend.onrender.com',  // <-- REPLACE WITH YOUR MOBILENET URL
-  siamesenet: 'https://your-siamese-backend.onrender.com',   // <-- REPLACE WITH YOUR SIAMESE URL
+  simplecnn: 'https://signature-ai-2.onrender.com',    // <-- REPLACE WITH YOUR SIMPLECNN URL
+  mobilenetv2: 'https://signature-ai-3.onrender.com',  // <-- REPLACE WITH YOUR MOBILENET URL
+  siamesenet: 'https://signature-ai-4.onrender.com',   // <-- REPLACE WITH YOUR SIAMESE URL
 };
 
 /**
