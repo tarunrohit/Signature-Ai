@@ -1,6 +1,5 @@
 const API_BASE_URL = 'https://tarun5098-signature-ai.hf.space';
 
-// The type for the response data from the backend.
 export interface VerificationResult {
   isOriginal: boolean;
   confidence: number;
@@ -26,8 +25,8 @@ export async function verifySignature(
     formData.append('reference_image', referenceImage);
   }
 
-  // MODIFIED: Reverted to the /verify/ endpoint
-  const endpoint = '/verify/';
+  // MODIFIED: Point to the new, specific API endpoint
+  const endpoint = '/api/verify';
 
   try {
     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
@@ -43,7 +42,6 @@ export async function verifySignature(
 
     const result = await response.json();
     
-    // Augment the result for the frontend UI components
     if (result.model === 'siamesenet') {
       result.modelType = 'dual';
       if (result.distance !== undefined) {
