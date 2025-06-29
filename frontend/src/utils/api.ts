@@ -1,24 +1,19 @@
 /**
  * A map of model IDs to their unique deployed backend URLs.
- * IMPORTANT: You must replace these placeholder URLs with the actual URLs
- * from your deployed services on Render or Railway.
+ * IMPORTANT: You must replace these with your actual Render URLs.
  */
 const API_URL_MAP: { [key: string]: string } = {
-  simplecnn: 'https://signature-ai-2.onrender.com',    // <-- REPLACE WITH YOUR SIMPLECNN URL
-  mobilenetv2: 'https://signature-ai-3.onrender.com',  // <-- REPLACE WITH YOUR MOBILENET URL
-  siamesenet: 'https://signature-ai-4.onrender.com',   // <-- REPLACE WITH YOUR SIAMESE URL
+  simplecnn: 'https://signature-ai-2.onrender.com',      // <-- REPLACE
+  mobilenetv2: 'https://signature-ai-3.onrender.com',  // <-- REPLACE
+  siamesenet: 'https://signature-ai-4.onrender.com',     // <-- REPLACE
 };
 
-/**
- * The structure of the data expected back from the API, augmented with
- * frontend-specific fields for the ResultDisplay component.
- */
 export interface VerificationResult {
   isOriginal: boolean;
   confidence: number;
   model: string;
   processingTime: number;
-  distance?: number; // Raw distance from the Siamese model
+  distance?: number;
   modelType: 'single' | 'dual';
   additionalMetrics?: {
     similarity?: number;
@@ -26,67 +21,70 @@ export interface VerificationResult {
 }
 
 /**
- * Makes a POST request to the appropriate backend service to verify a signature.
- *
- * @param modelId The ID of the model to use ('simplecnn', 'mobilenetv2', 'siamesenet').
- * @param image The signature image file to be tested.
- * @param referenceImage An optional reference image file, required for the Siamese model.
- * @returns A Promise that resolves to a VerificationResult object.
+ * NEW: Sends a quick, lightweight request to wake up the server.
+ * This prevents the main /verify request from timing out on a cold start.
+ * @param baseUrl The base URL of the backend service to wake up.
  */
+async function wakeUpServer(baseUrl: string): Promise<void> {
+  try {
+    console.log(`Pinging server at ${baseUrl} to wake it up...`);
+    // We use the healthz endpoint as it's the fastest possible response.
+    // We don't care about the response, just that the request completes.
+    await fetch(`${baseUrl}/`, { method: 'GET' });
+    console.log(`Server at ${baseUrl} is awake.`);
+  } catch (error) {
+    // We can ignore errors here, as the main fetch will handle them.
+    console.warn(`Wake-up ping failed for ${baseUrl}, proceeding anyway.`);
+  }
+}
+
 export async function verifySignature(
   modelId: string,
   image: File,
   referenceImage?: File
 ): Promise<VerificationResult> {
-  // 1. Select the correct backend URL based on the model ID.
-  const baseUrl = API_URL_MAP[modelId];
-  if (!baseUrl || baseUrl.includes('your-backend-name')) {
-    // This provides a helpful error if the URL hasn't been configured.
-    throw new Error(`Backend URL for model '${modelId}' is not configured. Please update api.ts.`);
+  const baseUrl = API_URL_MAP[modelId as keyof typeof API_URL_MAP];
+  if (!baseUrl || baseUrl.includes('your-')) {
+    throw new Error(`Backend URL for model '${modelId}' is not configured in api.ts.`);
   }
+  
+  // --- MODIFICATION: Wake up the server before sending the heavy request ---
+  await wakeUpServer(baseUrl);
+  // --- END OF MODIFICATION ---
 
-  // 2. Prepare the form data for the request.
   const formData = new FormData();
   formData.append('image', image);
 
-  // The Siamese network backend is the only one that needs a reference image.
   if (modelId === 'siamesenet' && referenceImage) {
     formData.append('reference_image', referenceImage);
   }
-
+  
+  const startTime = Date.now();
   try {
-    // 3. Make the network request to the selected backend.
     const response = await fetch(`${baseUrl}/verify/`, {
       method: 'POST',
       body: formData,
-      // Note: Do not set 'Content-Type' when using FormData.
-      // The browser automatically sets it with the correct multipart boundary.
     });
 
-    // 4. Handle non-successful responses (e.g., 404, 500).
     if (!response.ok) {
       const errorData = await response.json().catch(() => null);
       const detail = errorData?.detail || `Server for ${modelId} responded with status: ${response.status}`;
       throw new Error(detail);
     }
 
-    // 5. Process the successful JSON response.
     const result = await response.json();
+    const endTime = Date.now();
     
-    // Add a placeholder for processingTime if the backend doesn't provide it.
-    if (result.processingTime === undefined) {
-      result.processingTime = 0; // Default value
-    }
+    // Augment the result with frontend-specific data
+    result.processingTime = result.processingTime || (endTime - startTime);
     
-    // 6. Augment the result with frontend-specific data for the UI components.
     if (modelId === 'siamesenet') {
       result.modelType = 'dual';
       if (result.distance !== undefined) {
-         // Convert distance (lower is better) to a user-friendly similarity percentage.
          const similarity = Math.max(0, (1 - (result.distance / 1.5))) * 100;
          result.additionalMetrics = { similarity: similarity };
       }
-      result.model = 'Siamese Networks'; // Use a display-friendly name
+      result.model = 'Siamese Networks';
     } else {
       result.modelType = 'single';
       if (modelId === 'simplecnn') result.model = 'SimpleCNN';
@@ -96,7 +94,6 @@ export async function verifySignature(
     return result as VerificationResult;
 
   } catch (error: any) {
-    // 7. Handle network errors (e.g., backend is down, CORS issue).
     console.error(`API call failed for model ${modelId}:`, error);
     if (error.message.includes('Failed to fetch')) {
          throw new Error('Connection to the server failed. Please ensure the backend is running and reachable.');
