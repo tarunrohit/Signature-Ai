@@ -6,12 +6,17 @@ from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import tensorflow as tf
 import numpy as np
+from tensorflow.keras.utils import get_file
+from contextlib import asynccontextmanager
 
 from utils import (
     preprocess_for_cnn, 
     preprocess_for_mobilenet, 
     preprocess_for_siamese
 )
+
+# --- MODEL PLACEHOLDERS ---
+models = {}
 
 # --- CUSTOM FUNCTIONS (needed for loading) ---
 def euclidean_distance(vectors):
@@ -22,40 +27,64 @@ def contrastive_loss(y_true, y_pred, margin=1.0):
     y_true = tf.cast(y_true, y_pred.dtype)
     return tf.reduce_mean(y_true * tf.square(y_pred) + (1 - y_true) * tf.square(tf.maximum(margin - y_pred, 0)))
 
-# --- MODEL LOADING ON STARTUP ---
-print("Server starting up... Loading models.")
-try:
-    simple_cnn_model = tf.keras.models.load_model('best_signature_model_no_func.keras')
-    print("SimpleCNN model loaded.")
+# --- MODEL LOADING & LIFESPAN MANAGEMENT ---
+MODEL_URLS = {
+    "simple_cnn": "https://huggingface.co/Tarun5098/signature-ai-models/resolve/main/best_signature_model_no_func.keras",
+    "mobilenet": "https://huggingface.co/Tarun5098/signature-ai-models/resolve/main/best_signature_model_mobilenet_streamed.keras",
+    "siamese": "https://huggingface.co/Tarun5098/signature-ai-models/resolve/main/best_signature_siamese_model_final.keras"
+}
+MODELS_DIR = "models_cache"
 
-    mobilenet_model = tf.keras.models.load_model('best_signature_model_mobilenet_streamed.keras')
-    print("MobileNetV2 model loaded.")
+def download_and_load_model(model_name, url, custom_objects=None):
+    print(f"Downloading and loading {model_name} model...")
+    try:
+        model_path = get_file(f"{model_name}.keras", url, cache_dir=".", cache_subdir=MODELS_DIR)
+        model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
+        print(f"{model_name} model loaded successfully.")
+        return model
+    except Exception as e:
+        print(f"CRITICAL ERROR loading {model_name}: {e}")
+        raise e
 
-    siamese_model = tf.keras.models.load_model('best_signature_siamese_model_final.keras', custom_objects={
-        'contrastive_loss': contrastive_loss,
-        'euclidean_distance': euclidean_distance
-    })
-    print("Siamese model loaded.")
-    print("All models loaded successfully.")
-except Exception as e:
-    print(f"CRITICAL ERROR loading models: {e}")
-    simple_cnn_model = mobilenet_model = siamese_model = None
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("Lifespan startup: Beginning model loading...")
+    
+    custom_objects_siamese = {'contrastive_loss': contrastive_loss, 'euclidean_distance': euclidean_distance}
+    
+    models["simple_cnn"] = download_and_load_model("simple_cnn", MODEL_URLS["simple_cnn"])
+    models["mobilenet"] = download_and_load_model("mobilenet", MODEL_URLS["mobilenet"])
+    models["siamese"] = download_and_load_model("siamese", MODEL_URLS["siamese"], custom_objects=custom_objects_siamese)
+    
+    print("All models loaded. Application is ready.")
+    yield
+    print("Server shutting down.")
 
-# --- FastAPI App Setup ---
-app = FastAPI(title="SignatureAI API")
 
+# Pass the lifespan manager to the app
+app = FastAPI(title="SignatureAI API", lifespan=lifespan)
+
+# --- CORS Middleware ---
+origins = [
+    "http://localhost:5173",
+    "https://signature-ai.netlify.app"
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # --- ENDPOINTS ---
+@app.get("/healthz", status_code=200)
+def health_check():
+    return {"status": "ok"}
+
 @app.get("/")
 def read_root():
-    return {"message": "Welcome to the SignatureAI Verification API."}
+    return {"message": "Welcome to the SignatureAI Verification API. Models are loaded."}
 
 @app.post("/verify/")
 async def verify_signature_endpoint(
@@ -63,18 +92,17 @@ async def verify_signature_endpoint(
     image: UploadFile = File(...),
     reference_image: Optional[UploadFile] = File(None)
 ):
-    # This check remains as a safeguard
-    if model_id == 'simplecnn' and simple_cnn_model is None or \
-       model_id == 'mobilenetv2' and mobilenet_model is None or \
-       model_id == 'siamesenet' and siamese_model is None:
-        raise HTTPException(status_code=503, detail="A required model failed to load on startup. Please check the server logs.")
+    model_key = model_id.replace('v2', '')
+    if models.get(model_key) is None:
+        raise HTTPException(status_code=503, detail=f"The '{model_id}' model is not available. Please check server logs.")
 
     start_time = time.time()
     image_bytes = await image.read()
     response_data = {}
+    
+    model = models[model_key]
 
     if model_id == 'simplecnn':
-        model = simple_cnn_model
         processed_image = preprocess_for_cnn(image_bytes)
         prediction = model.predict(processed_image)[0][0]
         is_original = bool(prediction < 0.5)
@@ -82,7 +110,6 @@ async def verify_signature_endpoint(
         response_data = {"isOriginal": is_original, "confidence": float(confidence)}
             
     elif model_id == 'mobilenetv2':
-        model = mobilenet_model
         processed_image = preprocess_for_mobilenet(image_bytes)
         prediction = model.predict(processed_image)[0][0]
         is_original = bool(prediction < 0.5)
@@ -94,18 +121,13 @@ async def verify_signature_endpoint(
             raise HTTPException(status_code=400, detail="Reference image is required for the Siamese model.")
         
         anchor_bytes = await reference_image.read()
-        model = siamese_model
         processed_anchor = preprocess_for_siamese(anchor_bytes)
         processed_candidate = preprocess_for_siamese(image_bytes)
         distance = model.predict([processed_anchor, processed_candidate])[0][0]
         threshold = 0.9 
         is_original = bool(distance < threshold)
         confidence = max(0, (1 - (distance / (threshold * 1.5)))) * 100
-        response_data = { 
-            "isOriginal": is_original, 
-            "confidence": float(confidence),
-            "distance": float(distance)
-        }
+        response_data = { "isOriginal": is_original, "confidence": float(confidence), "distance": float(distance) }
             
     else:
         raise HTTPException(status_code=400, detail="Invalid model ID provided.")

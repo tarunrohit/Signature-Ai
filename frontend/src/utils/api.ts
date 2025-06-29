@@ -1,11 +1,13 @@
-const API_BASE_URL = 'https://tarun5098-signature-ai.hf.space';
+// IMPORTANT: Replace with your actual Railway backend URL after you deploy it.
+const API_BASE_URL = 'https://your-backend-name.up.railway.app'; 
 
+// The type for the response data from the backend.
 export interface VerificationResult {
   isOriginal: boolean;
   confidence: number;
   model: string;
   processingTime: number;
-  distance?: number; 
+  distance?: number;
   modelType: 'single' | 'dual';
   additionalMetrics?: {
     similarity?: number;
@@ -25,23 +27,21 @@ export async function verifySignature(
     formData.append('reference_image', referenceImage);
   }
 
-  // MODIFIED: Point to the /verify/ endpoint
-  const endpoint = '/verify/';
-
   try {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    const response = await fetch(`${API_BASE_URL}/verify/`, {
       method: 'POST',
       body: formData,
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
+      const errorData = await response.json().catch(() => null);
       const detail = errorData?.detail || `Server responded with status: ${response.status}`;
       throw new Error(detail);
     }
 
     const result = await response.json();
     
+    // Augment the result for the frontend UI components
     if (result.model === 'siamesenet') {
       result.modelType = 'dual';
       if (result.distance !== undefined) {
@@ -60,7 +60,7 @@ export async function verifySignature(
   } catch (error: any) {
     console.error("API call failed:", error);
     if (error.message.includes('Failed to fetch')) {
-         throw new Error('Connection to the server failed. Please ensure the backend is running and accessible.');
+         throw new Error('Connection to the server failed. Please ensure the backend is running.');
     }
     throw new Error(error.message || 'An unknown error occurred during verification.');
   }
