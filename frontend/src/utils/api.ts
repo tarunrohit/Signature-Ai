@@ -27,8 +27,8 @@ export async function verifySignature(
     formData.append('reference_image', referenceImage);
   }
 
-  // MODIFIED: Ensure the path starts with a slash
-  const endpoint = '/verify/';
+  // MODIFIED: Point to the root endpoint '/'
+  const endpoint = '/';
 
   try {
     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
@@ -37,7 +37,6 @@ export async function verifySignature(
     });
 
     if (!response.ok) {
-      // Get a more specific error message from the backend response
       const errorData = await response.json().catch(() => ({}));
       const detail = errorData?.detail || `Server responded with status: ${response.status}`;
       throw new Error(detail);
