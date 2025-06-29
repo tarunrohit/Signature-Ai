@@ -16,6 +16,7 @@ from utils import (
 )
 
 # --- MODEL PLACEHOLDERS ---
+# This dictionary will be populated during the lifespan startup event
 models = {}
 
 # --- CUSTOM FUNCTIONS (needed for loading) ---
@@ -44,14 +45,12 @@ def download_and_load_model(model_name, url, custom_objects=None):
         return model
     except Exception as e:
         print(f"CRITICAL ERROR loading {model_name}: {e}")
-        # In a real app, you might want to handle this more gracefully
-        # For now, we'll let it raise to see the error in logs.
         raise e
 
+# MODIFIED: Using FastAPI's lifespan manager to load models ONCE at startup.
+# This will be triggered by Gunicorn's --preload flag.
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # This code runs on startup after the server starts listening but before it accepts requests.
-    # It's the ideal place for loading models.
     print("Lifespan startup: Beginning model loading...")
     
     custom_objects_siamese = {'contrastive_loss': contrastive_loss, 'euclidean_distance': euclidean_distance}
@@ -60,9 +59,8 @@ async def lifespan(app: FastAPI):
     models["mobilenet"] = download_and_load_model("mobilenet", MODEL_URLS["mobilenet"])
     models["siamese"] = download_and_load_model("siamese", MODEL_URLS["siamese"], custom_objects=custom_objects_siamese)
     
-    print("All models loaded. Application is ready.")
+    print("All models loaded. Application is ready to accept requests.")
     yield
-    # Code here would run on shutdown
     print("Server shutting down.")
 
 
@@ -72,13 +70,13 @@ app = FastAPI(title="SignatureAI API", lifespan=lifespan)
 # --- CORS Middleware ---
 origins = [
     "http://localhost:5173",
-    "https://signature-ai.netlify.app"  # Your deployed frontend URL
+    "https://signature-ai.netlify.app"
 ]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],  # CORRECTED: from 'methods' to 'allow_methods'
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -86,12 +84,11 @@ app.add_middleware(
 
 @app.get("/healthz", status_code=200)
 def health_check():
-    """This endpoint is used by Render to check if the server is alive."""
     return {"status": "ok"}
 
 @app.get("/")
 def read_root():
-    return {"message": "Welcome to the SignatureAI Verification API."}
+    return {"message": "Welcome to the SignatureAI Verification API. Models are loaded."}
 
 @app.post("/verify/")
 async def verify_signature_endpoint(
@@ -101,7 +98,7 @@ async def verify_signature_endpoint(
 ):
     model_key = model_id.replace('v2', '')
     if models.get(model_key) is None:
-        raise HTTPException(status_code=503, detail=f"The '{model_id}' model is not ready. The server may be restarting or the model failed to load.")
+        raise HTTPException(status_code=503, detail=f"The '{model_id}' model is not available. Please check server logs.")
 
     start_time = time.time()
     image_bytes = await image.read()
@@ -134,11 +131,7 @@ async def verify_signature_endpoint(
         threshold = 0.9 
         is_original = bool(distance < threshold)
         confidence = max(0, (1 - (distance / (threshold * 1.5)))) * 100
-        response_data = { 
-            "isOriginal": is_original, 
-            "confidence": float(confidence),
-            "distance": float(distance)
-        }
+        response_data = { "isOriginal": is_original, "confidence": float(confidence), "distance": float(distance) }
             
     else:
         raise HTTPException(status_code=400, detail="Invalid model ID provided.")
@@ -146,8 +139,5 @@ async def verify_signature_endpoint(
     end_time = time.time()
     processing_time = int((end_time - start_time) * 1000)
 
-    response_data.update({
-        "model": model_id,
-        "processingTime": processing_time
-    })
+    response_data.update({"model": model_id, "processingTime": processing_time})
     return response_data
